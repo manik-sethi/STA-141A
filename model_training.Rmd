@@ -1,0 +1,148 @@
+---
+title: "scrap"
+author: "Manik Sethi"
+date: "2025-03-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+##################################################
+# 1. Load Required Libraries
+##################################################
+library(dplyr)
+library(tidyr)
+library(scales)
+library(caret)
+
+##################################################
+# 2. Load Session Data and Create Integrated Dataset (Unbalanced)
+##################################################
+# Assumes session files are stored in "./Data/" as session1.rds, session2.rds, ..., session18.rds.
+sessions <- vector("list", 18)
+for (i in 1:18) {
+  file_path <- paste0("./Data/session", i, ".rds")
+  if (file.exists(file_path)) {
+    sessions[[i]] <- readRDS(file_path)
+  } else {
+    warning("File not found: ", file_path)
+  }
+}
+
+# Build an integrated data frame; each row corresponds to one trial.
+integrated_list <- lapply(seq_along(sessions), function(i) {
+  sess <- sessions[[i]]
+  n_trials <- length(sess$contrast_left)
+  
+  # Compute average spike rate for each trial.
+  avg_spikes <- sapply(sess$spks, function(mat) mean(mat, na.rm = TRUE))
+  
+  # Compute contrast difference per trial.
+  contrast_diff <- sess$contrast_left - sess$contrast_right
+  
+  # Compute decision type based on contrasts.
+  decision_type <- sapply(seq_len(n_trials), function(t) {
+    left <- sess$contrast_left[t]
+    right <- sess$contrast_right[t]
+    if (left > right) {
+      "Left > Right"
+    } else if (right > left) {
+      "Right > Left"
+    } else if (left == 0 & right == 0) {
+      "Both Zero"
+    } else if (left == right & left != 0) {
+      "Equal Non-zeros"
+    } else {
+      NA_character_
+    }
+  })
+  
+  data.frame(
+    session_id    = i,
+    trial         = seq_len(n_trials),
+    feedback_type = sess$feedback_type,   # 1 = Correct, -1 = Incorrect
+    contrast_diff = contrast_diff,
+    avg_spikes    = avg_spikes,
+    decision_type = decision_type,
+    mouse_name    = sess$mouse_name,
+    stringsAsFactors = FALSE
+  )
+})
+
+integrated_data <- bind_rows(integrated_list)
+
+# Convert feedback_type to a factor: -1 becomes "Incorrect", 1 becomes "Correct"
+integrated_data <- integrated_data %>%
+  mutate(feedback_type = factor(feedback_type, levels = c(-1, 1),
+                                labels = c("Incorrect", "Correct")),
+         decision_type = factor(decision_type,
+                                levels = c("Left > Right", "Right > Left", "Both Zero", "Equal Non-zeros")))
+
+cat("Dimensions of Integrated Data (Unbalanced):", dim(integrated_data), "\n")
+head(integrated_data)
+
+##################################################
+# 3. Normalize Only avg_spikes to [0, 1]
+##################################################
+final_df <- integrated_data %>%
+  mutate(avg_spikes_norm = rescale(avg_spikes, to = c(0, 1))) %>%
+  dplyr::select(feedback_type, contrast_diff, avg_spikes_norm, trial, session_id, mouse_name, decision_type)
+
+cat("Dimensions of Final Data Frame:", dim(final_df), "\n")
+head(final_df)
+cat("Distribution of feedback_type in final_df:\n")
+print(table(final_df$feedback_type))
+
+##################################################
+# 4. Partition the Data for KNN Modeling
+##################################################
+# Use final_df as our model data (non-downsampled)
+model_df <- final_df
+set.seed(123)
+trainIndex <- createDataPartition(model_df$feedback_type, p = 0.7, list = FALSE)
+trainData <- model_df[trainIndex, ]
+testData  <- model_df[-trainIndex, ]
+
+##################################################
+# 5. Define a Grid of Possible k Values
+##################################################
+# Here we try even k's from 2 to 31
+knn_grid <- expand.grid(k = seq(2, 31, 2))
+
+##################################################
+# 6. Train the KNN Model with Cross-Validation
+##################################################
+set.seed(123)
+knn_model <- train(
+  feedback_type ~ contrast_diff + avg_spikes_norm,
+  data = trainData,
+  method = "knn",
+  tuneGrid = knn_grid,                # search over the grid of k values
+  trControl = trainControl(method = "cv", number = 10)  # 10-fold cross-validation
+)
+
+# Print model details to see which k was best
+cat("\nKNN Model Details:\n")
+print(knn_model)
+
+##################################################
+# 7. Evaluate on the Test Set
+##################################################
+knn_predictions <- predict(knn_model, newdata = testData %>% select(contrast_diff, avg_spikes_norm))
+conf_mat_knn <- confusionMatrix(knn_predictions, testData$feedback_type)
+
+cat("\nConfusion Matrix for KNN with Tuned k on Test Data:\n")
+print(conf_mat_knn)  # This prints all details of the confusion matrix
+
+# Extract and print key performance metrics
+accuracy <- conf_mat_knn$overall["Accuracy"]
+sensitivity <- conf_mat_knn$byClass["Sensitivity"]
+specificity <- conf_mat_knn$byClass["Specificity"]
+
+cat("\nPerformance Metrics:\n")
+cat("Accuracy:", round(accuracy, 4), "\n")
+cat("Sensitivity:", round(sensitivity, 4), "\n")
+cat("Specificity:", round(specificity, 4), "\n")
+```
+
+

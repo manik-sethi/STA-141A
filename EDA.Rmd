@@ -1,0 +1,631 @@
+---
+title: "Code for Project"
+author: "Manik Sethi"
+date: "2025-03-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(e1071)
+library(scales)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(kableExtra)
+library(factoextra)
+library(tidyr)
+library(MASS)
+```
+
+
+```{r}
+
+session <- vector("list", 18)
+for (i in 1:18) {
+  file_path <- paste0("./Data/session", i, ".rds")
+  if (file.exists(file_path)) {
+    session[[i]] <- readRDS(file_path)
+  } else {
+    warning("File not found: ", file_path)
+  }
+}
+
+get_session_data <- function(session_id) {
+  trial_data_list <- list()
+  
+  for (trial_id in seq_along(session[[session_id]]$spks)) {
+
+    spikes <- session[[session_id]]$spks[[trial_id]]
+    
+
+    trial_data <- data.frame(
+      session_id = session_id,
+      trial = trial_id,
+      feedback_type = session[[session_id]]$feedback_type[trial_id],
+      contrast_left = session[[session_id]]$contrast_left[trial_id],
+      contrast_right = session[[session_id]]$contrast_right[trial_id],
+      stringsAsFactors = FALSE
+    )
+
+    trial_data$spks <- list(spikes)
+    
+    trial_data_list[[trial_id]] <- trial_data
+  }
+  
+
+  session_data <- bind_rows(trial_data_list)
+  return(session_data)
+}
+
+mega_df <- bind_rows(lapply(seq_along(session), get_session_data))
+
+mega_df <- mega_df %>%
+  mutate(
+    total_spikes = sapply(spks, function(mat) sum(mat, na.rm = TRUE)),
+    average_spikes = sapply(spks, function(mat) mean(mat, na.rm = TRUE))
+  )
+
+mega_df <- mega_df %>%
+  mutate(correct = ifelse(feedback_type == 1, "Correct", "Incorrect"))
+
+cat("Dimensions of mega_df:", dim(mega_df), "\n")
+head(mega_df)
+
+```
+
+
+
+
+
+
+```{r}
+
+# Ensure the data has the spike statistics calculated
+mega_df <- mega_df %>%
+  mutate(
+    total_spikes = sapply(spks, function(mat) sum(mat, na.rm = TRUE)),
+    average_spikes = sapply(spks, function(mat) mean(mat, na.rm = TRUE))
+  )
+
+# make outcomes binary
+mega_df <- mega_df %>%
+  mutate(correct = ifelse(feedback_type == 1, "Correct", "Incorrect"))
+
+
+# create histogram of neuron activation by outcome type
+decision_hist <- ggplot(mega_df, aes(x = average_spikes, fill = correct)) +
+  geom_histogram(alpha = 0.6, position = "identity", binwidth = 0.01) +
+  facet_wrap(~ correct, scales = "fixed") +  # Ensures same y-axis scale
+  labs(title = "Distribution of Average Spikes by Decision Outcome",
+       x = "Average Spikes",
+       y = "Count") +
+  theme_minimal()
+
+# save as png
+ggsave(
+  filename = "my_plot.png",
+  plot = decision_hist,      # The ggplot object
+  width = 6, height = 4, dpi = 300
+)
+```
+
+```{r}
+mega_df <- mega_df %>%
+  mutate(
+    total_spikes = sapply(spks, function(mat) sum(mat, na.rm = TRUE)),
+    average_spikes = sapply(spks, function(mat) mean(mat, na.rm = TRUE))
+  )
+
+# make the decision binary
+mega_df <- mega_df %>%
+  mutate(correct = ifelse(feedback_type == 1, "Correct", "Incorrect"))
+
+# TA recommended I add a density plot in additin to Histogram
+decision_density <- ggplot(mega_df, aes(x = average_spikes, fill = correct)) +
+  geom_density(alpha = 0.6, position = "identity") +
+  facet_wrap(~ correct, scales = "fixed") +  # make y axis same for easier comparison
+  labs(
+    title = "Distribution of Average Spikes by Decision Outcome",
+    x = "Average Spikes",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+ggsave(
+  filename = "my_plot_density.png",
+  plot = decision_density,  
+  width = 6, height = 4, dpi = 300
+)
+```
+
+
+```{r}
+
+# I am interested in seeing how each specific mouse does, calculate accuracy across different mice!
+
+n.session=length(session)
+
+n_success = 0
+n_trial = 0
+for(i in 1:n.session){
+    tmp = session[[i]];
+    n_trial = n_trial + length(tmp$feedback_type);
+    n_success = n_success + sum(tmp$feedback_type == 1);
+}
+n_success/n_trial
+
+
+
+n_sessions <- length(sessions)
+n_success <- 0
+n_trials <- 0
+
+for (i in 1:n_sessions) {
+  tmp <- sessions[[i]]
+  n_trials <- n_trials + length(tmp$feedback_type)
+  n_success <- n_success + sum(tmp$feedback_type == 1)
+}
+
+overall_success_rate <- n_success / n_trials
+
+
+
+mouse_success <- data.frame()
+
+# calculates success rates and adds it to the df
+for (i in 1:n_sessions) {
+  tmp <- sessions[[i]]
+  mouse <- tmp$mouse_name
+  
+  success_count <- sum(tmp$feedback_type == 1)
+  total_count <- length(tmp$feedback_type)
+  mouse_success <- rbind(mouse_success, data.frame(mouse, success_count, total_count))
+}
+
+mouse_success_rate <- mouse_success %>%
+  group_by(mouse) %>%
+  summarise(
+    total_successes = sum(success_count),
+    total_trials = sum(total_count),
+    success_rate = total_successes / total_trials
+  )
+write.csv(mouse_success_rate, file = "mouse_success_rate.csv", row.names = FALSE)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+session_summary <- lapply(seq_along(sessions), function(i) {
+  sess <- sessions[[i]]
+  
+  # Number of trials (using contrast_left as the indicator)
+  n_trials <- length(sess$contrast_left)
+  
+  # Number of neurons (assuming brain_area is a vector)
+  n_neurons <- length(sess$brain_area)
+  
+  data.frame(
+    session_id  = i,
+    num_trials  = n_trials,
+    num_neurons = n_neurons,
+    stringsAsFactors = FALSE
+  )
+})
+
+session_summary_df <- bind_rows(session_summary)
+print(session_summary_df)
+
+df_stats <- session_summary_df %>%
+  summarise(
+    mean_num_trials   = mean(num_trials, na.rm = TRUE),
+    sd_num_trials     = sd(num_trials, na.rm = TRUE),
+    mean_num_neurons  = mean(num_neurons, na.rm = TRUE),
+    sd_num_neurons    = sd(num_neurons, na.rm = TRUE)
+  )
+write.csv(df_stats, file = "df_stats.csv", row.names = FALSE)
+```
+
+
+```{r}
+
+
+mega_df_list <- lapply(seq_along(sessions), function(i) {
+  sess <- sessions[[i]]
+  n_trials <- length(sess$contrast_left)
+  data.frame(
+    session_id     = i,
+    trial          = seq_len(n_trials),
+    contrast_left  = sess$contrast_left,
+    contrast_right = sess$contrast_right,
+    feedback_type  = sess$feedback_type,
+    mouse_name     = sess$mouse_name,
+    date_exp       = sess$date_exp,
+    brain_area     = I(rep(list(sess$brain_area), n_trials)),
+    spks           = I(sess$spks)
+  )
+})
+
+mega_df <- do.call(rbind, mega_df_list)
+
+
+num_missing_rows <- sum(rowSums(is.na(mega_df)) > 0)
+total_rows <- nrow(mega_df)
+missing_percentage <- (num_missing_rows / total_rows) * 100
+
+```
+
+
+```{r}
+
+mega_df_list <- lapply(seq_along(sessions), function(i) {
+  sess <- sessions[[i]]
+  n_trials <- length(sess$contrast_left)
+  
+  data.frame(
+    session_id = i,
+    trial_id = seq_len(n_trials),
+    mouse_name = sess$mouse_name,
+    contrast_left = sess$contrast_left,
+    contrast_right = sess$contrast_right,
+    contrast_diff = sess$contrast_left - sess$contrast_right,
+    feedback_type = sess$feedback_type,
+    brain_area = I(rep(list(sess$brain_area), n_trials)),
+    spks = I(sess$spks)
+  )
+})
+
+mega_df <- do.call(rbind, mega_df_list)
+
+brain_area_expanded <- mega_df %>%
+ dplyr:: select(session_id, trial_id, mouse_name, brain_area) %>%
+  unnest(brain_area)
+
+# Count the number of trials each brain area appears in per session
+brain_area_summary <- brain_area_expanded %>%
+  group_by(session_id, mouse_name, brain_area) %>%
+  summarise(num_trials = n(), .groups = "drop")
+```
+
+```{r}
+
+
+top_10_areas <- brain_area_summary %>%
+  group_by(brain_area) %>%
+  summarise(total_neurons = sum(num_trials), .groups = "drop") %>%
+  arrange(desc(total_neurons)) %>%
+  slice(1:10)
+
+# only include top ten areas
+brain_area_top10 <- brain_area_summary %>%
+  filter(brain_area %in% top_10_areas$brain_area)
+
+# create visualization of "Top 10 Brain Areas Across Sessions"
+ggplot(brain_area_top10, aes(x = factor(session_id), y = brain_area, fill = num_trials)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma") +
+  labs(title = "Top 10 Brain Areas Across Sessions",
+       x = "Session",
+       y = "Brain Area",
+       fill = "Trial Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# save it to use in html
+ggsave("brain_area_top10_heatmap.png", width = 10, height = 6, dpi = 300)
+
+```
+
+
+
+```{r}
+
+# I am interested in seeing change in activity over time
+
+plot_spikes_per_area_smooth <- function(session_data, session_number, span = 0.2, crop_start = 50, crop_end = 250) {
+
+  spks_list <- session_data$spks
+  areas_vec <- session_data$brain_area
+  
+  unique_areas <- unique(areas_vec)
+  n_areas <- length(unique_areas)
+  n_trials <- length(spks_list)
+  
+  # crop because instructor advised so, will help with the boundary effect
+  crop_end <- min(crop_end, n_trials)
+  crop_indices <- crop_start:crop_end
+  
+
+  area_avg <- matrix(NA, nrow = n_trials, ncol = n_areas)
+  for (t in seq_len(n_trials)) {
+    spk_mat <- spks_list[[t]]
+    for (j in seq_len(n_areas)) {
+      idx <- which(areas_vec == unique_areas[j])
+      area_avg[t, j] <- mean(spk_mat[idx, ], na.rm = TRUE)
+    }
+  }
+  
+  # smooth it out (a lot)
+  smoothed_area_avg <- sapply(seq_len(n_areas), function(j) {
+    y <- area_avg[, j]
+    fit <- loess(
+      y ~ I(1:n_trials),
+      span = span,
+      control = loess.control(surface = "direct"),
+      family = "symmetric"
+    )
+    predict(fit, data.frame(`I(1:n_trials)` = 1:n_trials))
+  })
+  
+  cropped_smoothed <- smoothed_area_avg[crop_indices, ]
+  
+  matplot(
+    x = crop_indices,
+    y = cropped_smoothed,
+    type = "l",
+    lty = 1,
+    lwd = 2,
+    col = rainbow(n_areas),
+    xlab = "Trial",
+    ylab = "Smoothed Average Spike Counts",
+    main = paste("Spikes per Area (Smoothed) in Session", session_number, "\nTrials", crop_start, "to", crop_end)
+  )
+  
+  legend(
+    "topright",
+    legend = unique_areas,
+    col = rainbow(n_areas),
+    lty = 1,
+    lwd = 2,
+    cex = 0.8
+  )
+}
+
+# save session as example of smooth
+png("spikes_per_area_session_12.png", width = 8, height = 6, units = "in", res = 300)
+plot_spikes_per_area_smooth(sessions[[12]], 12, span = 0.2, crop_start = 50, crop_end = 200)
+dev.off()  # Close device to save
+
+
+
+# save session as example of rough
+png("spikes_per_area_session_4.png", width = 8, height = 6, units = "in", res = 300)
+plot_spikes_per_area_smooth(sessions[[4]], 4, span = 0.2, crop_start = 50, crop_end = 200)
+dev.off()
+
+
+```
+
+
+
+# Creating the Dataset
+
+```{r}
+
+sessions <- vector("list", 18)
+for (i in 1:18) {
+  file_path <- paste0("./Data/session", i, ".rds")
+  if (file.exists(file_path)) {
+    sessions[[i]] <- readRDS(file_path)
+  } else {
+    warning("File not found: ", file_path)
+  }
+}
+
+# Build an integrated data frame; each row corresponds to one trial.
+integrated_list <- lapply(seq_along(sessions), function(i) {
+  sess <- sessions[[i]]
+  n_trials <- length(sess$contrast_left)
+  
+  # Compute average spike rate for each trial.
+  avg_spikes <- sapply(sess$spks, function(mat) mean(mat, na.rm = TRUE))
+  
+  # Compute contrast difference per trial.
+  contrast_diff <- sess$contrast_left - sess$contrast_right
+  
+  # (Optional) Compute decision type (not used in modeling predictors)
+  decision_type <- sapply(seq_len(n_trials), function(t) {
+    left <- sess$contrast_left[t]
+    right <- sess$contrast_right[t]
+    if (left > right) {
+      "Left > Right"
+    } else if (right > left) {
+      "Right > Left"
+    } else if (left == 0 & right == 0) {
+      "Both Zero"
+    } else if (left == right & left != 0) {
+      "Equal Non-zeros"
+    } else {
+      NA_character_
+    }
+  })
+  
+  data.frame(
+    session_id    = i,
+    trial         = seq_len(n_trials),
+    feedback_type = sess$feedback_type,   # 1 = Correct, -1 = Incorrect
+    contrast_diff = contrast_diff,
+    avg_spikes    = avg_spikes,
+    decision_type = decision_type,
+    mouse_name    = sess$mouse_name,
+    stringsAsFactors = FALSE
+  )
+})
+
+integrated_data <- bind_rows(integrated_list)
+
+# Convert feedback_type to a factor: -1 becomes "Incorrect", 1 becomes "Correct"
+integrated_data <- integrated_data %>%
+  mutate(feedback_type = factor(feedback_type, levels = c(-1, 1),
+                                labels = c("Incorrect", "Correct")),
+         decision_type = factor(decision_type,
+                                levels = c("Left > Right", "Right > Left", "Both Zero", "Equal Non-zeros")))
+
+cat("Dimensions of Integrated Data (Unbalanced):", dim(integrated_data), "\n")
+print(head(integrated_data))
+
+##################################################
+# 3. Normalize Predictor: Normalize avg_spikes to [0, 1]
+##################################################
+final_df <- integrated_data %>%
+  mutate(avg_spikes_norm = rescale(avg_spikes, to = c(0, 1))) %>%
+  dplyr::select(feedback_type, contrast_diff, avg_spikes_norm, trial, session_id, mouse_name, decision_type)
+
+print(head(final_df))
+
+```
+
+```{r}
+
+# create QQ plots for average_spikes
+baka <- integrated_data %>%
+  mutate(log_avg_spikes = log(avg_spikes + 1))
+
+QQ_total_spikes <- ggplot(baka, aes(sample = avg_spikes)) +
+  stat_qq(color = "steelblue") +
+  stat_qq_line(color = "red") +
+  facet_wrap(~ feedback_type) +
+  labs(title = "QQ Plots of Average Spikes by Feedback Type",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  theme_minimal()
+
+QQ_log_total_spikes <- ggplot(baka, aes(sample = log_avg_spikes)) +
+  stat_qq(color = "steelblue") +
+  stat_qq_line(color = "red") +
+  facet_wrap(~ feedback_type) +
+  labs(title = "QQ Plots of Average Spikes by Feedback Type",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  theme_minimal()
+
+ggsave(
+  filename = "QQ_avg_spikes.png",
+  plot = QQ_total_spikes,
+  width = 6, height = 4, dpi = 300
+)
+
+ggsave(
+  filename = "QQ_log_avg_spikes.png",
+  plot = QQ_log_total_spikes,
+  width = 6, height = 4, dpi = 300
+)
+
+
+ggplot(baka, aes(sample = avg_spikes)) +
+  stat_qq(color = "steelblue") +
+  stat_qq_line(color = "red") +
+  facet_wrap(~ feedback_type) +
+  labs(title = "QQ Plots of Total Spikes by Feedback Type",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  theme_minimal()
+
+ggplot(baka, aes(sample = log_avg_spikes)) +
+  stat_qq(color = "steelblue") +
+  stat_qq_line(color = "red") +
+  facet_wrap(~ feedback_type) +
+  labs(title = "QQ Plots of Average Spikes by Feedback Type, Log Transformation",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  theme_minimal()
+```
+
+
+```{r}
+
+# make everything positive by adding an offset
+offset <- abs(min(integrated_data$avg_spikes, na.rm = TRUE)) + 0.001  # Add a small buffer
+avg_spikes_positive <- integrated_data$avg_spikes + offset
+
+# use box cox
+bc_obj <- boxcox(avg_spikes_positive ~ 1, lambda = seq(-2, 2, 0.1), plotit = TRUE)
+optimal_lambda <- bc_obj$x[which.max(bc_obj$y)]
+cat("Optimal lambda for Box-Cox transformation:", optimal_lambda, "\n")
+
+if (abs(optimal_lambda) < 0.01) {
+  integrated_data$avg_spikes_boxcox <- log(avg_spikes_positive)
+} else {
+  integrated_data$avg_spikes_boxcox <- (avg_spikes_positive^optimal_lambda - 1) / optimal_lambda
+}
+
+integrated_data$avg_spikes_boxcox_norm <- scale(integrated_data$avg_spikes_boxcox)
+
+ggplot(integrated_data, aes(sample = avg_spikes_boxcox)) +
+  stat_qq(color = "steelblue") +
+  stat_qq_line(color = "red") +
+  facet_wrap(~ feedback_type) +
+  labs(title = "QQ Plot of Box-Cox Transformed Average Spikes by Feedback Type",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles (Box-Cox Transformed)") +
+  theme_minimal()
+
+ggsave(
+  filename = "QQ_boxcox_avg_spikes.png",
+  plot = QQ_log_total_spikes,
+  width = 6, height = 4, dpi = 300
+)
+
+```
+
+
+
+```{r}
+
+integrated_list <- lapply(seq_along(sessions), function(i) {
+  sess <- sessions[[i]]
+  n_trials <- length(sess$contrast_left)
+  
+  data.frame(
+    session_id    = i,
+    trial         = seq_len(n_trials),
+    feedback_type = sess$feedback_type,
+    contrast_left = sess$contrast_left,
+    contrast_right= sess$contrast_right,
+    brain_area    = I(rep(list(sess$brain_area), n_trials)),
+    stringsAsFactors = FALSE
+  )
+})
+
+integrated_data <- bind_rows(integrated_list)
+
+brain_area_freq <- integrated_data %>%
+  unnest(brain_area) %>%
+  group_by(brain_area) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(desc(count))
+
+top5 <- head(brain_area_freq, 5)
+
+total_trials <- nrow(integrated_data)
+
+trial_presence <- sapply(top5$brain_area, function(area) {
+  sum(sapply(integrated_data$brain_area, function(vec) area %in% vec))
+})
+
+top5_df <- data.frame(
+  brain_area = top5$brain_area,
+  trial_count = trial_presence,
+  percent_present = (trial_presence / total_trials) * 100
+)
+```
+
+
+```{r}
+head(max(integrated_data$avg_spikes))
+```
+
+
+
+

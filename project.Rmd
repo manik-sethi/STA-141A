@@ -1,0 +1,194 @@
+---
+title: "STA 141A Project"
+author: "By: Manik Sethi \\
+
+Instructor: Shize Chen"
+date: "2025-03-12"
+output: html_document
+---
+
+
+
+## I. Introduction
+
+Understanding neural activity to predict decision correctness is revolutionizing neuroscience, with real-world applications in brain-computer-interfaces (BCIs) and neuroprosthetics. Companies like Neuralink and Precision Neuroscience are currently developing methods to understand neural activity in real-time for clinical use, such as restoring motor function, and enabling assistive speech. Despite their efforts, accurately predicting whether a decision was correct based on neural activity remains an important challenge, limiting the efficacy of BCI-driven devices in areas such as motor control accuracy.
+
+This report investigates whether stimulus contrast and neural spike timing can predict whether the decision made was correct. I hypothesize that combining feedback stimuli and neural dynamics will help us create a model capable of guessing correct versus incorrect decisions. More specifically, I theorize that that higher a contrast between the left and right stimulus, and more neural timing will lead to higher decision correctness. However it is also entirely possible that one variable alone, such as neural timing, may explain a majority of the variance, while the other only offers a marginal benefit in explaining correctness.
+
+Our dataset consists of 18 session files (session1.rds to session18.rds), each containing neural data from multiple brain regions for each trial. Each file contains data on multiple trials, where each trial involves a mouse performing a decision making task. Each .rds file features five variables: `feedback_type` which indicates trial outcome and correctness, stimuli contrast of the left and right screen respectively, time bins which are centered time points for spike data, neural activity, and 'brain_area' which denotes what brain region spikes took place in.
+
+
+Creating models that improve decision correctness prediction for brain data can improve the accuracy of BCI-driven neuroprothetics. Having a more precise model in real-time assistive devices would allow for better movement control and communication for patients with problems such as quadriplegia.
+
+
+## II. Explanatory Data Analysis
+
+In order to work understand the nature of our data, we must first organize it into one comprehensive dataframe. We do this by concatenating all the trials from each session into one list called sessions. Doing this gives us a matrix where the rows represent different trials, and the column represent entries for variables. Each trial gives us  feedback type, which indicates the correctness of the decision, left stimulus contrast value, right stimulus contrast value, and then a matrix of 'spikes', where rows represent individual neurons and columns represents how many neurons spiked during a specific time bin. Finally, each trial also includes a list of brain areas, which tell us where the neurons are.
+```{r, echo=FALSE}
+session_1 <- read.csv("session_1.csv")
+
+# Then render a nice table
+library(knitr)
+kable(head(session_1), caption = "Session 1 Summary")
+```
+
+Across the 18 sessions, we can see the experimental designed returned an average of about 282 trials per session (avg = 282.28, sd = 77.22), showing moderate variability in the number of trials. In parallel, the amount of neurons recorded per session averages around 906 (avg = 905.83, sd = 313.50). This one has a wide variety, and being able to account for differences in which neurons were recorded could pose a potential problem down the line. These variations in the data highlight the need for robust data processing techniques which can accommodate discrepencies when building predictive models. It is also worth it to see how many NA's are in the dataset. After using a function to count invalid rows, we can see all of them are valid, which is great for data preservation. If we had to get rid of data, it may also have resulted in a loss of information which explains variance, hurting our models ability to make correct inferences on learned patterns.
+```{r, echo=FALSE}
+df_stats <- read.csv("df_stats.csv")
+
+# Then render a nice table
+library(knitr)
+kable(df_stats, caption = "Session 1 Summary")
+```
+
+
+---
+
+I also want to see how neuron activity might differ between different feedback types. This may give us a clue into patterns that lie in the data. To visualize this, I created a histogram of average spikes by the decision outcome. We can see that the shape of our distribution are very similar, and both of them seem homoscedastic as well. The glaring difference between the two is how many neurons fired when the mice chose the correct option. Since correct trials have higher spike activity, we can infer that neural engagement is more active when making correct decisions. While the mean spike strength for both levels of a decision is the same, the magnitude of how many spikes occurred seems to provide value in differentiating between feedback types. In the second graph on the right, I've visualized the density instead, and here we can see that a larger proportion of incorrect trials (blue graph) are concentrated around the mean. Another interesting pattern seen in this density graph is the presence of a second bump around 0.6 on the x-axis. This may hint at a sub-population of trials or brain areas that may call for further investigation. For our report, we will ignore these potential sub-populations and go ahead with out main analysis.
+```{r, results='asis', echo=FALSE}
+library(htmltools)
+HTML('
+<div style="display: flex; justify-content: center;">
+    <img src="my_plot.png" width="45%" style="margin-right: 10px;">
+    <img src="my_plot_density.png" width="45%">
+</div>
+')
+```
+
+
+To double check that the spread of the our two distributions are equal, I calculate the standard deviation for spike activation rates across trials with correct decisions compared to incorrect decisions. As shown below, both of these values are very close one another, and there doesn't seem to by any meaningful difference between the two.
+```{r, echo=FALSE}
+avg_spike_sd_by_feedback <- read.csv("avg_spike_sd_by_feedback.csv", stringsAsFactors = FALSE)
+kable(avg_spike_sd_by_feedback, caption = "Standard Deviation of Neuron Activation by trials")
+```
+
+It is also non-trivial to check the distribution of our outcome variable, as this will affect our predictive model during training. Looking at the table below, we can see that around 70% of our trials are a success. We can either choose to train our model with all the data, or use 30% failed data and 30% success data. We will make this decision when it comes time to integrate our data. Looking further, we can also see the success rate for each one of the mice as well and see if there are any significant differences. Cori performed at around 64% accuracy while Lederberg performed at about 76%. Granted that Cori did have less trials to work with, this poses no relevant issue to us and we can proceed.
+
+```{r, echo=FALSE}
+
+session_1 <- read.csv("mouse_success_rate.csv")
+
+# Then render a nice table
+library(knitr)
+kable(session_1, caption = "Mouse Success Rates")
+```
+A confounding variable that is worth exploring is the brain area activation over the hundreds of trials. To display this, I created a visualization that maps trend lines of each brain area across all the trials. Random variation is expected, but seeing a drastic decline of brain area activity as time goes on may signal to us that the mice may be mentally exhausted, and the outcome variables are a result of a confound, not our chosen predictors. In order to clearly see the a pattern and not random noise, I have applied smoothing to our graph for insights on general trends. In addition, I have cropped the data from trial 50 to 200 to minimize the boundary effect. Using session 12 as an example, we can see that our trend lines are relatively straight, and end up with the same average neuron activation as what they started with. On the other hand, session 4 strangely has all the brain areas converge to have similar spike counts deauspite starting off very diverse and spread out. Essentially, the spread in spike counts across brain regions becomes tighter as we progress in trials. 
+
+```{r, results='asis', echo=FALSE}
+library(htmltools)
+HTML('
+<div style="display: flex; justify-content: center;">
+    <img src="spikes_per_area_session_4.png" width="45%" style="margin-right: 10px;">
+    <img src="spikes_per_area_session_12.png" width="45%">
+</div>
+')
+```
+
+
+I was curious about which brain areas were active across sessions, and if specific regions had more neuron activation. To explore this, I extracted the top 10 brain areas that had the most neuron activation across all sessions. Next, I generate a a heatmap, where brighter colors represent more activity, and the tiles represent the brain area for a specific trial. We can see that the "root" area stands out as being consistent. among all the trials. The same can not be said for the "MOp" region, which only appears in one trial where it has incredibly high activation, only to never be seen again.
+
+![](brain_area_top10_heatmap.png)
+
+To check if our assumption of normality has been met for our predictor variable, we can visualize the QQ plot for variables like 'avg_spikes'. Doing so will compare the theoretical normal quantiles against our sample quantiles, revealing any type of skew if our plot non-linear. Looking at the initial QQ plot, we can see significant deviations from the reference line in red, implying a heavy skew. To fix this, we first apply a log transformation as it is the simplest. While this did straighten the QQ plot somewhat, there were still deviations causing it to be non-normal. Next, we tried a more advanced method using the Box-Cox transformation. Since lambda was not equal to 0 (lambda = -0.18), it implies that our Box-Cox transformation found a parameters which better optimizes for normality. Therefore, we can proceed with our data transformed using the Box-Cox method.
+
+
+```{r, results='asis', echo=FALSE}
+library(htmltools)
+HTML('
+<div style="display: flex; justify-content: center;">
+    <img src="QQ_avg_spikes.png" width="30%" style="margin-right: 10px;">
+    <img src="QQ_log_avg_spikes.png" width="30%" style="margin-right: 10px;">
+    <img src="QQ_boxcox_avg_spikes.png" width="30%">
+</div>
+')
+
+```
+
+But why do we even normalize our data in the first place? Considering that our our predictor variables are all operating on different scales, features with larger ranges can overpower the analysis. For example, our contrast different has a maximum value of 1, 
+whereas the maximum for 'avg_spikes is ~0.07. This may disproportionately influence any computation involving distance calculations, such as KNN.
+
+## III. Data Integration
+
+
+In order to create a final dataset that we will train and test our model on, it is important to have a representation of data that will be present in the test set. As mentioned, our data is 70% "correct" trials. Assuming the final test set will have the same distribution, we will choose not to artificially downsample our data. Balancing the data will superficially increase the metrics, but it risks decreasing the models ability to generalize in practical purposes. Retaining the original distribution of our data will result in a more reliable model for the real world.
+
+We also normalize our data's distribution, which is important in handling outliers. By transforming the data close to a normal distribution, we prevent highly skewed data influencing our training more than it should. This was done through the Box-Cox transformation for the 'total_spikes' predictor variable. Since lambda was not equal to zero in our Box-Cox transformation, it implies that there is a better transformation than log to normalize the data. This is why we use Box-Cox as opposed to a logarithmic transformation
+
+It is also important to normalize scale so each predictor variable contributes equally during training. Right now variables like "avg_spikes" have maximum values of ~0.07, while "contrast" has a maximum value of 1. By normalizing the scale, our model assigns each variable equal importance, improving overall performance when we run inferences. To implement this change, I apply a rescale the data to values between 0 and 1.
+
+The final predictor variables we will go with are contrast difference, and the average spike across the trial which has a box-cox transformation applied to it and has been scaled between the ranges of [0,1]
+
+## IV. Predictive Modeling
+
+I use five different models: KNN, XGB, SVM, logistic regression, and random forest.
+
+
+##### KNN
+
+```{r, echo=FALSE}
+knn <- read.csv("knn_performance_summary.csv")
+kable(knn, caption = "kNN Model Performance")
+```
+
+The first parameter we need to set-up for our KNN is how many clusters we should create. Having too few clusters in our model may not create distinctions meaningful enough to accurately predict our outcome. On the other hand, too many clusters are computationally expensive and result in unneccesary resources spent to make inferences. Using grid search, we start at 2 clusters, and keep adding 2 clusters until we hit a plateu or decline in accuracy. This algorithm reaches a maximum at around k = 28 (accuracy ~ 0.6953) for the optimal amount. Compared to the "No Information Rate" (NIR) of ~0.70, we do worse than random chance, which is calculate by dividing our accuracy by the NIR yielding a number less than one. We can also see our p-value is far above any standard p-value, indicating that our KNN performance is not significantly different than random guessing. Some drawbacks to our model are the low sensitivity (0.0635) compared to specificity (0.0.9529). In the context of the experiment, it means that our model does worse at correctly predicting 'wrong' feedback types. Therefore, using grid search to determine the optimal amount of clusters, we found that our accuracy is **69.53%**
+
+#### Random Forest
+
+```{r, echo=FALSE}
+rf <- read.csv("rf_performance_summary.csv")
+kable(rf, caption = "Mouse Success Rates")
+```
+
+Random forest provides an accuracy of of **64.54%**, making it worse than random chance. Unlike the other models, we can see that sensitivity (0.3107) and specificity (0.7819) here are not as far apart as they are for other models. This is proved through the Mcnemar's test P-value (~0.004) which tests to see if there is any significant difference between the two rates. Using a standard p-value of 0.05, we can conclude that the difference in our sensitivity and specificity proportions are significant, and have an underlying cause in the dataset or how we trained out model.
+
+
+#### XGB
+```{r, echo=FALSE}
+xgb <- read.csv("xgb_performance_summary.csv")
+kable(xgb, caption = "XGB Model Performance")
+```
+
+The next model we used is "eXtreme Gradient Boosting", this technique allows us to capture non-linear relationships within the dataset that may be ignored by other models. When we run inferences on our model on the test set, we achieve an accuracy of 0.7104. Compared to our NIR of 0.7104, this means we do no better than random chance, which we can see works better than our KNN. It is still important to note that the p-value of this accuracy is about 0.5128, which means that our XGB is not significantly different than random guessing. One downside to this model is a sensitivity of 0. This means that our model never predicts 'incorrect' feedback types. The Mcnemar's P-test gives us a value below the standard p value of 0.05, indicating that the difference in sensitivity and specificity proportions are not due to random chance, and there is most likely an underlying cause to this difference.
+
+
+
+#### SVM
+
+```{r, echo=FALSE}
+svm <- read.csv("svm_performance_summary.csv")
+kable(svm, caption = "SVM Model Perofmrance")
+```
+
+In our usage of the Support-Vector Machine, we leverage the 'radial kernel', which allows us to map our data onto higher dimensions such that a hyperplane can be intersected through them. As for our 'C' value, we iterate through the following values for this parameter: [0.25, 0.5, 1, 2, 4]. The C parameter is responsible for controlling the trade-of between maximizing the margins of the SVM, or minimizing the missclassifications made during training. Since we've descended upon a smaller C, it means our model is optimizing for a larger margin, creating an even more accurate fit. Our SVM model is accurate **71.04%** of the time, But similar to our XGB model, it has a specificity of 1 and a sensitivity of 0. This means our model again has come to the conclusion that simply predicting the majority class will result in the smallest error. Just like the other models, the p-value here tests for significance between our accuracy rate versus the NIR. At a p-value of 0.5128, we can see that our accuracy is not significantly different than the NIR, and as a result we can not confidently say that some pattern has been learned.
+
+#### Logistic Regression
+
+```{r, echo=FALSE}
+lr <- read.csv("logistic_performance_summary.csv")
+kable(lr, caption = "Logistic Regression Performance")
+```
+
+Our logistic model gives an accuracy of **71.04%**, meaning it does only as good as a random guess would. Similar to the other models, the p-value for comparing whether our accuracy is any different than random chance is far above the standard p-value we choose at 0.05. With a given value of 0.5128, the difference between our model and random chance is not significant at all.
+
+We can infer that the patterns learned here are not as robust or discerning as the patterns learned in our KNN for example. Similar to other models, our logistic regression tends to have a higher specificity than sensitivity. Given that we didn't balance the dataset, the reason for this bias may be our models inability to capture non-linear relationships (assuming they exist). The Mcnemar's test p-value here is ~0, which is far below and standard p value such as 0.05. From this, we can conclude that the difference in sensitivity and specificity proportions are unlikely due to random chance, and the errors aren't balanced across outcomes.
+
+
+## V. Prediction performance on test tests
+```{r, echo=FALSE}
+final <- read.csv("model_performance_summary.csv")
+kable(final, caption = "Final Model Performance")
+```
+Looking at the following table, we can see that the maximum accuracy among all five models caps out at 0.7104. This also happens to be the same as the NIR, which represents the distribution, and the expected value if we simply predicted the majority class all of the time. On the other hand, some models do *worse* than random chance, but only because they don't try predicting the majority class all of the time. Looking at the sensitivity and specificity metrics, we can see that our KNN had a specificity of 0.9519 and a sensitivity of 0.0680. The random forest model had a sensitivity of 0.3107 and specificity of 0.7819. As for the ROC-AUC, our KNN had the highest value at 0.6389.
+
+## VI. Discussion
+
+If we assume that the cost of making a wrong prediction is equal across classes, then based on our model performance we should choose one with the highest accuracy. By consequence this will also yield the model with the highest specificity, more specifically a value of 1.00. Although it doesn't seem like these models learned much because they make the same guess for every trial, it still maximizes accuracy. On the other hand, models like KNN and Random forest seem to have been able to make some type of distinction between our two classes, hence the non-zero sensitivity. Also, it is worth noting that the assumption we made previously in the report had been met, specifically on the distribution of data in our training set vs test set. Both had more "correct" feedback trials, and as a result some models resorted to a strategy of always guessing the majority class to reduce error.
+
+Some next steps for this project would be to go back to data analysis to find some combination of predictor variables that explain more variance. I'd also apply techniques like PCA which reduce multi-collinearity by making the components orthogonal to each other. As we can see here, our model performs under, or at the No-Information_Rate, which has very little practical use for us. 
+
+
+## Acknowledgements
+
+I used Generative AI to assist in debugging code used for explanatory data analysis, and also helping with redundant code for model training.
+
+
