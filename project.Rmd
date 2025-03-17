@@ -105,16 +105,16 @@ HTML('
 ```
 
 But why do we even normalize our data in the first place? Considering that our our predictor variables are all operating on different scales, features with larger ranges can overpower the analysis. For example, our contrast different has a maximum value of 1, 
-whereas the maximum for 'avg_spikes is ~0.07. This may disproportionately influence any computation involving distance calculations, such as KNN.
+whereas the maximum for 'avg_spikes' is ~0.07. This may disproportionately influence any computation involving distance calculations, such as KNN.
 
 ## III. Data Integration
 
 
 In order to create a final dataset that we will train and test our model on, it is important to have a representation of data that will be present in the test set. As mentioned, our data is 70% "correct" trials. Assuming the final test set will have the same distribution, we will choose not to artificially downsample our data. Balancing the data will superficially increase the metrics, but it risks decreasing the models ability to generalize in practical purposes. Retaining the original distribution of our data will result in a more reliable model for the real world.
 
-We also normalize our data's distribution, which is important in handling outliers. By transforming the data close to a normal distribution, we prevent highly skewed data influencing our training more than it should. This was done through the Box-Cox transformation for the 'total_spikes' predictor variable. Since lambda was not equal to zero in our Box-Cox transformation, it implies that there is a better transformation than log to normalize the data. This is why we use Box-Cox as opposed to a logarithmic transformation
+We also normalize our data's distribution, which is important in handling outliers. By transforming the data close to a normal distribution, we prevent highly skewed data influencing our training more than it should. This was done through the Box-Cox transformation for the 'avg_spikes' predictor variable. Since lambda was not equal to zero in our Box-Cox transformation, it implies that there is a better transformation than log to normalize the data. This is why we use Box-Cox as opposed to a logarithmic transformation
 
-It is also important to normalize scale so each predictor variable contributes equally during training. Right now variables like "avg_spikes" have maximum values of ~0.07, while "contrast" has a maximum value of 1. By normalizing the scale, our model assigns each variable equal importance, improving overall performance when we run inferences. To implement this change, I apply a rescale the data to values between 0 and 1.
+It is also important to normalize scale so each predictor variable contributes equally during training. Right now variables like "avg_spikes" have maximum values of ~0.07, while "contrast" has a maximum value of 1. By normalizing the scale, our model assigns each variable equal importance, improving overall performance when we run inferences. To implement this change, I rescale the data to values between 0 and 1.
 
 The final predictor variables we will go with are contrast difference, and the average spike across the trial which has a box-cox transformation applied to it and has been scaled between the ranges of [0,1]
 
@@ -189,6 +189,6 @@ Some next steps for this project would be to go back to data analysis to find so
 
 ## Acknowledgements
 
-I used Generative AI to assist in debugging code used for explanatory data analysis, and also helping with redundant code for model training.
+I used Generative AI to assist explanatory data analysis, and also helping with model training.
 
 
