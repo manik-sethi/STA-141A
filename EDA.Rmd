@@ -139,6 +139,25 @@ ggsave(
 ```
 
 
+
+```{r}
+
+avg_spike_sd_by_feedback <- mega_df %>%
+  group_by(feedback_type) %>%
+  summarize(
+    sd_avg_spikes = sd(average_spikes, na.rm = TRUE),
+    n_trials = n()
+  ) %>%
+  mutate(feedback_type = ifelse(feedback_type == 1, "Correct", "Incorrect"))
+
+# Round the standard deviation to 4 decimal places
+avg_spike_sd_by_feedback$sd_avg_spikes <- round(avg_spike_sd_by_feedback$sd_avg_spikes, 4)
+
+# Write the results to a CSV file
+write.csv(avg_spike_sd_by_feedback, "avg_spike_sd_by_feedback.csv", row.names = FALSE)
+
+```
+
 ```{r}
 
 # I am interested in seeing how each specific mouse does, calculate accuracy across different mice!
@@ -423,18 +442,17 @@ for (i in 1:18) {
   }
 }
 
-# Build an integrated data frame; each row corresponds to one trial.
 integrated_list <- lapply(seq_along(sessions), function(i) {
   sess <- sessions[[i]]
   n_trials <- length(sess$contrast_left)
   
-  # Compute average spike rate for each trial.
+  # get avg spike
   avg_spikes <- sapply(sess$spks, function(mat) mean(mat, na.rm = TRUE))
   
-  # Compute contrast difference per trial.
+  # get contrast diff
   contrast_diff <- sess$contrast_left - sess$contrast_right
   
-  # (Optional) Compute decision type (not used in modeling predictors)
+
   decision_type <- sapply(seq_len(n_trials), function(t) {
     left <- sess$contrast_left[t]
     right <- sess$contrast_right[t]
@@ -454,7 +472,7 @@ integrated_list <- lapply(seq_along(sessions), function(i) {
   data.frame(
     session_id    = i,
     trial         = seq_len(n_trials),
-    feedback_type = sess$feedback_type,   # 1 = Correct, -1 = Incorrect
+    feedback_type = sess$feedback_type,
     contrast_diff = contrast_diff,
     avg_spikes    = avg_spikes,
     decision_type = decision_type,
@@ -465,7 +483,7 @@ integrated_list <- lapply(seq_along(sessions), function(i) {
 
 integrated_data <- bind_rows(integrated_list)
 
-# Convert feedback_type to a factor: -1 becomes "Incorrect", 1 becomes "Correct"
+
 integrated_data <- integrated_data %>%
   mutate(feedback_type = factor(feedback_type, levels = c(-1, 1),
                                 labels = c("Incorrect", "Correct")),
@@ -475,9 +493,7 @@ integrated_data <- integrated_data %>%
 cat("Dimensions of Integrated Data (Unbalanced):", dim(integrated_data), "\n")
 print(head(integrated_data))
 
-##################################################
-# 3. Normalize Predictor: Normalize avg_spikes to [0, 1]
-##################################################
+# normalize for future use (aka the QQ plot)
 final_df <- integrated_data %>%
   mutate(avg_spikes_norm = rescale(avg_spikes, to = c(0, 1))) %>%
   dplyr::select(feedback_type, contrast_diff, avg_spikes_norm, trial, session_id, mouse_name, decision_type)
