@@ -1,24 +1,19 @@
 ---
-title: "scrap"
+title: "Model Training"
 author: "Manik Sethi"
 date: "2025-03-17"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-
-##################################################
-# 1. Load Required Libraries
-##################################################
+```{r}
 library(dplyr)
 library(tidyr)
 library(scales)
 library(caret)
+library(pROC)
+```
 
-##################################################
-# 2. Load Session Data and Create Integrated Dataset (Unbalanced)
-##################################################
-# Assumes session files are stored in "./Data/" as session1.rds, session2.rds, ..., session18.rds.
+```{r}
 sessions <- vector("list", 18)
 for (i in 1:18) {
   file_path <- paste0("./Data/session", i, ".rds")
@@ -29,18 +24,14 @@ for (i in 1:18) {
   }
 }
 
-# Build an integrated data frame; each row corresponds to one trial.
 integrated_list <- lapply(seq_along(sessions), function(i) {
   sess <- sessions[[i]]
   n_trials <- length(sess$contrast_left)
-  
-  # Compute average spike rate for each trial.
+
   avg_spikes <- sapply(sess$spks, function(mat) mean(mat, na.rm = TRUE))
-  
-  # Compute contrast difference per trial.
+
   contrast_diff <- sess$contrast_left - sess$contrast_right
   
-  # Compute decision type based on contrasts.
   decision_type <- sapply(seq_len(n_trials), function(t) {
     left <- sess$contrast_left[t]
     right <- sess$contrast_right[t]
@@ -60,7 +51,7 @@ integrated_list <- lapply(seq_along(sessions), function(i) {
   data.frame(
     session_id    = i,
     trial         = seq_len(n_trials),
-    feedback_type = sess$feedback_type,   # 1 = Correct, -1 = Incorrect
+    feedback_type = sess$feedback_type,
     contrast_diff = contrast_diff,
     avg_spikes    = avg_spikes,
     decision_type = decision_type,
@@ -71,78 +62,342 @@ integrated_list <- lapply(seq_along(sessions), function(i) {
 
 integrated_data <- bind_rows(integrated_list)
 
-# Convert feedback_type to a factor: -1 becomes "Incorrect", 1 becomes "Correct"
+# map incorrect to -1 and correct to 1
 integrated_data <- integrated_data %>%
   mutate(feedback_type = factor(feedback_type, levels = c(-1, 1),
                                 labels = c("Incorrect", "Correct")),
          decision_type = factor(decision_type,
                                 levels = c("Left > Right", "Right > Left", "Both Zero", "Equal Non-zeros")))
 
-cat("Dimensions of Integrated Data (Unbalanced):", dim(integrated_data), "\n")
-head(integrated_data)
 
-##################################################
-# 3. Normalize Only avg_spikes to [0, 1]
-##################################################
+
 final_df <- integrated_data %>%
   mutate(avg_spikes_norm = rescale(avg_spikes, to = c(0, 1))) %>%
   dplyr::select(feedback_type, contrast_diff, avg_spikes_norm, trial, session_id, mouse_name, decision_type)
 
-cat("Dimensions of Final Data Frame:", dim(final_df), "\n")
-head(final_df)
-cat("Distribution of feedback_type in final_df:\n")
-print(table(final_df$feedback_type))
 
-##################################################
-# 4. Partition the Data for KNN Modeling
-##################################################
-# Use final_df as our model data (non-downsampled)
+# create test-trian ration of 70/30
 model_df <- final_df
 set.seed(123)
 trainIndex <- createDataPartition(model_df$feedback_type, p = 0.7, list = FALSE)
 trainData <- model_df[trainIndex, ]
 testData  <- model_df[-trainIndex, ]
 
-##################################################
-# 5. Define a Grid of Possible k Values
-##################################################
-# Here we try even k's from 2 to 31
-knn_grid <- expand.grid(k = seq(2, 31, 2))
+```
 
-##################################################
-# 6. Train the KNN Model with Cross-Validation
-##################################################
+
+
+```{r}
+
+# train the model
+
+tc <- trainControl(method = "cv", number = 10)
+
+# KNN
+
+knn_grid <- expand.grid(k = seq(2, 31, 2))
 set.seed(123)
 knn_model <- train(
   feedback_type ~ contrast_diff + avg_spikes_norm,
   data = trainData,
   method = "knn",
-  tuneGrid = knn_grid,                # search over the grid of k values
-  trControl = trainControl(method = "cv", number = 10)  # 10-fold cross-validation
+  tuneGrid = knn_grid,
+  trControl = tc
 )
-
-# Print model details to see which k was best
 cat("\nKNN Model Details:\n")
 print(knn_model)
 
-##################################################
-# 7. Evaluate on the Test Set
-##################################################
-knn_predictions <- predict(knn_model, newdata = testData %>% select(contrast_diff, avg_spikes_norm))
-conf_mat_knn <- confusionMatrix(knn_predictions, testData$feedback_type)
+# LOGISTIC
 
-cat("\nConfusion Matrix for KNN with Tuned k on Test Data:\n")
-print(conf_mat_knn)  # This prints all details of the confusion matrix
+set.seed(123)
+logistic_model <- train(
+  feedback_type ~ contrast_diff + avg_spikes_norm,
+  data = trainData,
+  method = "glm",
+  family = "binomial",
+  trControl = tc
+)
+cat("\nLogistic Regression Model Details:\n")
+print(logistic_model)
 
-# Extract and print key performance metrics
-accuracy <- conf_mat_knn$overall["Accuracy"]
-sensitivity <- conf_mat_knn$byClass["Sensitivity"]
-specificity <- conf_mat_knn$byClass["Specificity"]
+# RANDOM FOREST
 
-cat("\nPerformance Metrics:\n")
-cat("Accuracy:", round(accuracy, 4), "\n")
-cat("Sensitivity:", round(sensitivity, 4), "\n")
-cat("Specificity:", round(specificity, 4), "\n")
+set.seed(123)
+rf_model <- train(
+  feedback_type ~ contrast_diff + avg_spikes_norm,
+  data = trainData,
+  method = "rf",
+  trControl = tc,
+  tuneLength = 5
+)
+cat("\nRandom Forest Model Details:\n")
+print(rf_model)
+
+# XGB
+
+set.seed(123)
+xgb_model <- train(
+  feedback_type ~ contrast_diff + avg_spikes_norm,
+  data = trainData,
+  method = "xgbTree",
+  trControl = tc,
+  tuneLength = 5
+)
+cat("\nXGBoost Model Details:\n")
+print(xgb_model)
+
+# SVM
+set.seed(123)
+svm_model <- train(
+  feedback_type ~ contrast_diff + avg_spikes_norm,
+  data = trainData,
+  method = "svmRadial",
+  trControl = tc,
+  tuneLength = 5
+)
+cat("\nSVM (Radial) Model Details:\n")
+print(svm_model)
+
+
 ```
 
 
+```{r}
+
+# evaluate model on session test set (not the final one provided)
+
+evaluate_model <- function(model, test_data, predictors) {
+  predictions <- predict(model, newdata = test_data %>% dplyr::select(all_of(predictors)))
+  cm <- confusionMatrix(predictions, test_data$feedback_type)
+  cat("\nConfusion Matrix for", model$method, ":\n")
+  print(cm)
+  return(cm)
+}
+
+predictors <- c("contrast_diff", "avg_spikes_norm")
+
+cm_knn <- evaluate_model(knn_model, testData, predictors)
+cm_logistic <- evaluate_model(logistic_model, testData, predictors)
+cm_rf <- evaluate_model(rf_model, testData, predictors)
+cm_xgb <- evaluate_model(xgb_model, testData, predictors)
+cm_svm <- evaluate_model(svm_model, testData, predictors)
+
+model_summary <- function(model_name, conf_mat, param_str = "None") {
+  
+  # extract p-values (if available, otherwise set to NA)
+  p_acc_nir <- if ("AccuracyPValue" %in% names(conf_mat$overall)) conf_mat$overall["AccuracyPValue"] else NA
+  mcnemar_p <- if ("McnemarPValue" %in% names(conf_mat$overall)) conf_mat$overall["McnemarPValue"] else NA
+  
+  data.frame(
+    Model        = model_name,
+    Accuracy     = round(as.numeric(conf_mat$overall["Accuracy"]), 4),
+    Sensitivity  = round(as.numeric(conf_mat$byClass["Sensitivity"]), 4),
+    Specificity  = round(as.numeric(conf_mat$byClass["Specificity"]), 4),
+    P_Acc_vs_NIR = ifelse(!is.na(p_acc_nir), round(as.numeric(p_acc_nir), 6), NA),
+    Mcnemar_P    = ifelse(!is.na(mcnemar_p), round(as.numeric(mcnemar_p), 6), NA),
+    Model_Params = param_str,
+    stringsAsFactors = FALSE
+  )
+}
+
+# KNN
+knn_params <- paste("k =", knn_model$bestTune$k)
+knn_summary <- model_summary("KNN", cm_knn, knn_params)
+write.csv(knn_summary, "knn_performance_summary.csv", row.names = FALSE)
+
+# Logistic Regression
+logistic_summary <- model_summary("Logistic Regression", cm_logistic, "GLM (binomial)")
+write.csv(logistic_summary, "logistic_performance_summary.csv", row.names = FALSE)
+
+# Random Forest
+rf_params <- paste(names(rf_model$bestTune), rf_model$bestTune, sep = "=", collapse = ", ")
+rf_summary <- model_summary("Random Forest", cm_rf, rf_params)
+write.csv(rf_summary, "rf_performance_summary.csv", row.names = FALSE)
+
+# XGB
+xgb_params <- paste(
+  paste("eta", xgb_model$bestTune$eta, sep = "="),
+  paste("max_depth", xgb_model$bestTune$max_depth, sep = "="),
+  paste("gamma", xgb_model$bestTune$gamma, sep = "="),
+  paste("colsample_bytree", xgb_model$bestTune$colsample_bytree, sep = "="),
+  paste("min_child_weight", xgb_model$bestTune$min_child_weight, sep = "="),
+  paste("subsample", xgb_model$bestTune$subsample, sep = "="),
+  sep = ", "
+)
+xgb_summary <- model_summary("XGBoost", cm_xgb, xgb_params)
+write.csv(xgb_summary, "xgb_performance_summary.csv", row.names = FALSE)
+
+# SVM
+svm_params <- paste(
+  paste("C", svm_model$bestTune$C, sep = "="),
+  paste("sigma", svm_model$bestTune$sigma, sep = "="),
+  sep = ", "
+)
+svm_summary <- model_summary("SVM (Radial)", cm_svm, svm_params)
+
+
+write.csv(svm_summary, "svm_performance_summary.csv", row.names = FALSE)
+
+
+
+```
+
+```{r}
+
+# run final inference
+test_paths <- c("test/test1.rds", "test/test2.rds")
+test_sessions <- vector("list", length(test_paths))
+for (i in seq_along(test_paths)) {
+  if (file.exists(test_paths[i])) {
+    test_sessions[[i]] <- readRDS(test_paths[i])
+  } else {
+    warning("File not found: ", test_paths[i])
+  }
+}
+
+test_integrated_list <- lapply(seq_along(test_sessions), function(i) {
+  sess <- test_sessions[[i]]
+  n_trials <- length(sess$contrast_left)
+  
+  avg_spikes <- sapply(sess$spks, function(mat) mean(mat, na.rm = TRUE))
+  contrast_diff <- sess$contrast_left - sess$contrast_right
+  
+  data.frame(
+    trial         = seq_len(n_trials),
+    feedback_type = sess$feedback_type,
+    contrast_diff = contrast_diff,
+    avg_spikes    = avg_spikes,
+    stringsAsFactors = FALSE
+  )
+})
+test_integrated_data <- bind_rows(test_integrated_list)
+
+test_integrated_data <- test_integrated_data %>%
+  mutate(avg_spikes_norm = rescale(avg_spikes, to = c(0, 1)))
+
+test_integrated_data <- test_integrated_data %>%
+  mutate(feedback_type = factor(feedback_type, levels = c(-1, 1),
+                                labels = c("Incorrect", "Correct")))
+
+
+predictors <- c("contrast_diff", "avg_spikes_norm")
+
+evaluate_model_test <- function(model, test_data, predictors) {
+  predictions <- predict(model, newdata = test_data %>% dplyr::select(all_of(predictors)))
+  cm <- confusionMatrix(predictions, test_data$feedback_type)
+  cat("\nConfusion Matrix for", model$method, "on Test Data:\n")
+  print(cm)
+  return(cm)
+}
+
+cm_knn_test <- evaluate_model_test(knn_model, test_integrated_data, predictors)
+cm_logistic_test <- evaluate_model_test(logistic_model, test_integrated_data, predictors)
+cm_rf_test <- evaluate_model_test(rf_model, test_integrated_data, predictors)
+cm_xgb_test <- evaluate_model_test(xgb_model, test_integrated_data, predictors)
+cm_svm_test <- evaluate_model_test(svm_model, test_integrated_data, predictors)
+
+
+# print out important metrics
+cat("\nTest Data Performance Metrics for KNN:\n")
+cat("Accuracy:", round(cm_knn_test$overall["Accuracy"], 4), "\n")
+cat("Sensitivity:", round(cm_knn_test$byClass["Sensitivity"], 4), "\n")
+cat("Specificity:", round(cm_knn_test$byClass["Specificity"], 4), "\n")
+
+cat("\nTest Data Performance Metrics for Logistic Regression:\n")
+cat("Accuracy:", round(cm_logistic_test$overall["Accuracy"], 4), "\n")
+cat("Sensitivity:", round(cm_logistic_test$byClass["Sensitivity"], 4), "\n")
+cat("Specificity:", round(cm_logistic_test$byClass["Specificity"], 4), "\n")
+
+cat("\nTest Data Performance Metrics for Random Forest:\n")
+cat("Accuracy:", round(cm_rf_test$overall["Accuracy"], 4), "\n")
+cat("Sensitivity:", round(cm_rf_test$byClass["Sensitivity"], 4), "\n")
+cat("Specificity:", round(cm_rf_test$byClass["Specificity"], 4), "\n")
+
+cat("\nTest Data Performance Metrics for XGBoost:\n")
+cat("Accuracy:", round(cm_xgb_test$overall["Accuracy"], 4), "\n")
+cat("Sensitivity:", round(cm_xgb_test$byClass["Sensitivity"], 4), "\n")
+cat("Specificity:", round(cm_xgb_test$byClass["Specificity"], 4), "\n")
+
+cat("\nTest Data Performance Metrics for SVM (Radial):\n")
+cat("Accuracy:", round(cm_svm_test$overall["Accuracy"], 4), "\n")
+cat("Sensitivity:", round(cm_svm_test$byClass["Sensitivity"], 4), "\n")
+cat("Specificity:", round(cm_svm_test$byClass["Specificity"], 4), "\n")
+
+```
+
+
+```{r}
+# ROC calculations
+
+
+# create function for modulatirty
+get_model_performance <- function(model, test_data, predictors, positive_class = "Incorrect") {
+  
+  predictions <- predict(model, newdata = test_data %>% dplyr::select(all_of(predictors)))
+  
+  
+  cm <- confusionMatrix(predictions, test_data$feedback_type)
+  
+  accuracy <- as.numeric(cm$overall["Accuracy"])
+  sensitivity <- as.numeric(cm$byClass["Sensitivity"])
+  specificity <- as.numeric(cm$byClass["Specificity"])
+
+  probs <- tryCatch(
+    {
+      pred_probs <- predict(model, newdata = test_data %>% dplyr::select(all_of(predictors)), type = "prob")
+      if (!is.numeric(pred_probs[[positive_class]])) {
+         pred_probs[[positive_class]] <- as.numeric(as.character(pred_probs[[positive_class]]))
+      }
+      pred_probs
+    },
+    error = function(e) {
+      message("Predicted probabilities not available for ", model$method, ": ", e$message)
+      NULL
+    }
+  )
+  
+  if (!is.null(probs)) {
+    if (all(is.na(probs[[positive_class]]))) {
+      roc_auc <- NA
+    } else {
+      roc_obj <- roc(response = test_data$feedback_type,
+                     predictor = probs[[positive_class]],
+                     levels = c("Correct", "Incorrect"),
+                     direction = "<")
+      roc_auc <- as.numeric(auc(roc_obj))
+    }
+  } else {
+    roc_auc <- NA
+  }
+  data.frame(
+    Accuracy = round(accuracy, 4),
+    Sensitivity = round(sensitivity, 4),
+    Specificity = round(specificity, 4),
+    ROC_AUC = round(roc_auc, 4)
+  )
+}
+
+predictors <- c("contrast_diff", "avg_spikes_norm")
+
+# creating final df
+# calc performance metrics for each one
+knn_perf <- get_model_performance(knn_model, testData, predictors, positive_class = "Incorrect")
+logistic_perf <- get_model_performance(logistic_model, testData, predictors, positive_class = "Incorrect")
+rf_perf <- get_model_performance(rf_model, testData, predictors, positive_class = "Incorrect")
+xgb_perf <- get_model_performance(xgb_model, testData, predictors, positive_class = "Incorrect")
+svm_perf <- get_model_performance(svm_model, testData, predictors, positive_class = "Incorrect")
+
+knn_perf$Model <- "KNN"
+logistic_perf$Model <- "Logistic Regression"
+rf_perf$Model <- "Random Forest"
+xgb_perf$Model <- "XGBoost"
+svm_perf$Model <- "SVM (Radial)"
+
+performance_summary <- rbind(knn_perf, logistic_perf, rf_perf, xgb_perf, svm_perf)
+performance_summary <- performance_summary[, c("Model", "Accuracy", "Sensitivity", "Specificity", "ROC_AUC")]
+
+print(performance_summary)
+
+# write it to csv so I can use it in the other file
+write.csv(performance_summary, file = "model_performance_summary.csv", row.names = FALSE)
+```
