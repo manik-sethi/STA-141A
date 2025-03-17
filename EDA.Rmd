@@ -521,7 +521,7 @@ QQ_log_total_spikes <- ggplot(baka, aes(sample = log_avg_spikes)) +
   stat_qq(color = "steelblue") +
   stat_qq_line(color = "red") +
   facet_wrap(~ feedback_type) +
-  labs(title = "QQ Plots of Average Spikes by Feedback Type",
+  labs(title = "QQ Plots of Log-Average Spikes by Feedback Type",
        x = "Theoretical Quantiles",
        y = "Sample Quantiles") +
   theme_minimal()
@@ -578,7 +578,7 @@ if (abs(optimal_lambda) < 0.01) {
 
 integrated_data$avg_spikes_boxcox_norm <- scale(integrated_data$avg_spikes_boxcox)
 
-ggplot(integrated_data, aes(sample = avg_spikes_boxcox)) +
+box_coxQQ <- ggplot(integrated_data, aes(sample = avg_spikes_boxcox)) +
   stat_qq(color = "steelblue") +
   stat_qq_line(color = "red") +
   facet_wrap(~ feedback_type) +
@@ -589,7 +589,7 @@ ggplot(integrated_data, aes(sample = avg_spikes_boxcox)) +
 
 ggsave(
   filename = "QQ_boxcox_avg_spikes.png",
-  plot = QQ_log_total_spikes,
+  plot = box_coxQQ,
   width = 6, height = 4, dpi = 300
 )
 
